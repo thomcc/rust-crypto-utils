@@ -71,6 +71,7 @@ __expand_check_macro! {
     ("sha2",   SHA2),   // Enable SHA1 and SHA256 support.
     ("sha3",   SHA3),   // Enable SHA512 and SHA3 support.
     ("sm4",    SM4),    // Enable SM3 and SM4 support.
+    ("sb",     SB),
 }
 
 /// Linux hardware capabilities mapped to target features.
@@ -89,6 +90,7 @@ pub mod hwcaps {
     pub const SHA2: c_ulong = libc::HWCAP_SHA2;
     pub const SHA3: c_ulong = libc::HWCAP_SHA3 | libc::HWCAP_SHA512;
     pub const SM4: c_ulong = libc::HWCAP_SM3 | libc::HWCAP_SM4;
+    pub const SB: c_ulong = libc::HWCAP_SB;
 }
 
 // Apple OS (macOS, iOS, watchOS, and tvOS) `check!` macro.
@@ -127,6 +129,9 @@ macro_rules! check {
     };
     ("sm4") => {
         false
+    };
+    ("sb") => {
+        $crate::aarch64::sysctlbyname(b"hw.optional.arm.FEAT_SB\0")
     };
 }
 

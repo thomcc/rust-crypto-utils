@@ -23,19 +23,32 @@ compile_error!("This crate only builds on `aarch64` targets");
 use core::arch::asm;
 
 cpufeatures::new!(dit_supported, "dit");
+cpufeatures::new!(sb_supported, "sb");
 
 /// Data-Independent Timing: support for enabling features of AArch64 CPUs which improve
 /// constant-time operation.
 pub struct Dit {
-    supported: dit_supported::InitToken,
+    dit_supported: dit_supported::InitToken,
+    sb_supported: sb_supported::InitToken,
 }
 
 impl Dit {
     /// Initialize Data-Independent Timing using runtime CPU feature detection.
     pub fn init() -> Self {
         Self {
-            supported: dit_supported::init(),
+            dit_supported: dit_supported::init(),
+            sb_supported: sb_supported::init(),
         }
+    }
+
+    /// Call `f` with DIT enabled, returning the result. Takes care to ensure
+    /// that that any computations which occur during `f` do not leak outside
+    /// the critical section.
+    pub fn with<R, F: FnOnce() -> R>(s: &self, f: F) -> R {
+        let guard = self.enable();
+        let mut o: Option<F> = Some(f);
+        let f: &mut dyn FnMut() -> R = &mut || o.take().unwrap()();
+        core::hint::black_box(f)()
     }
 
     /// Enable Data-Independent Timing (if available).
@@ -44,7 +57,8 @@ impl Dit {
     #[must_use]
     pub fn enable(&self) -> Guard<'_> {
         let was_enabled = if self.is_supported() {
-            unsafe { set_dit_enabled() }
+            unsafe { set_dit_enabled() };
+            self.speculation_barrier();
         } else {
             false
         };
@@ -64,9 +78,17 @@ impl Dit {
         }
     }
 
-    /// Check if DIT is supported by this CPU.
+    /// Check if DIT is dit_supported by this CPU.
     pub fn is_supported(&self) -> bool {
-        self.supported.get()
+        self.dit_supported.get()
+    }
+
+    fn speculation_barrier(&self) -> bool {
+        if self.sb_supported.get() {
+            unsafe { spec_barrier_with_sb() };
+        } else {
+            spec_barrier_without_sb();
+        }
     }
 }
 
@@ -81,7 +103,9 @@ pub struct Guard<'a> {
 
 impl Drop for Guard<'_> {
     fn drop(&mut self) {
-        if self.dit.supported.get() {
+        if self.dit.dit_supported.get() {
+            // Note: no need to call `self.speculation_barrier()` here, it's fine if the processor
+            // speculates later instructions while in DIT mode.
             unsafe { restore_dit(self.was_enabled) }
         }
     }
@@ -120,6 +144,15 @@ unsafe fn restore_dit(enabled: bool) {
         // Disable DIT
         unsafe { asm!("msr DIT, #0", options(nomem, nostack, preserves_flags)) };
     }
+}
+
+#[target_feature(enable = "sb")]
+unsafe fn spec_barrier_with_sb() {
+    unsafe { asm!("sb", options(nostack)) }
+}
+
+fn spec_barrier_without_sb() {
+    unsafe { asm!("dsb nsh", "isb sy", options(nostack)) }
 }
 
 #[cfg(test)]
